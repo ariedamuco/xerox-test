@@ -66,6 +66,7 @@ COLUMNS = [
     "bunteto_intezkedesek",  # Penal measures/sentences
     "elhalalozes_ideje",     # Date of death
     "elhalalozes_helye",     # Place of death
+    "elhalalozes_oka",       # Cause of death
     "temetes_helye",         # Burial/interment place
     "temetes_link",          # Link to burial place
     "raw_fields",            # All other fields as JSON fallback
@@ -257,6 +258,16 @@ def _multi_text(tags) -> str:
     return " | ".join(_text(t) for t in tags if _text(t))
 
 
+def _clean_label(raw: str) -> str:
+    """
+    Normalise a field label extracted from HTML.
+    Drupal emits labels as "Születési hely:\xa0" — the non-breaking space
+    (\xa0) sits *after* the colon, so plain .strip() / .rstrip(":") leaves
+    the colon intact and the FIELD_MAP lookup silently fails.
+    """
+    return raw.replace("\xa0", " ").strip().rstrip(":").strip()
+
+
 def parse_detail_page(soup: BeautifulSoup, url: str, name: str) -> dict:
     """
     Extract all relevant fields from an individual person detail page.
@@ -282,7 +293,7 @@ def parse_detail_page(soup: BeautifulSoup, url: str, name: str) -> dict:
         items_tag = field_div.find(class_=lambda c: c and "field-items" in c)
         if not label_tag:
             continue
-        label = label_tag.get_text(strip=True).rstrip(":").strip()
+        label = _clean_label(label_tag.get_text(strip=True))
         if items_tag:
             values = [_text(i) for i in items_tag.find_all(
                 class_=lambda c: c and "field-item" in c
@@ -290,13 +301,14 @@ def parse_detail_page(soup: BeautifulSoup, url: str, name: str) -> dict:
             value = " | ".join(v for v in values if v)
         else:
             value = _text(field_div)
-        raw[label] = value
+        if label:
+            raw[label] = value
 
     # --- Table-based field layout (some Drupal themes) ---
     for row in soup.find_all("tr"):
         cells = row.find_all(["th", "td"])
         if len(cells) == 2:
-            label = _text(cells[0]).rstrip(":").strip()
+            label = _clean_label(_text(cells[0]))
             value = _text(cells[1])
             if label and value:
                 raw[label] = value
@@ -306,7 +318,7 @@ def parse_detail_page(soup: BeautifulSoup, url: str, name: str) -> dict:
         terms = dl.find_all("dt")
         descs = dl.find_all("dd")
         for dt, dd in zip(terms, descs):
-            label = _text(dt).rstrip(":").strip()
+            label = _clean_label(_text(dt))
             value = _text(dd)
             if label:
                 raw[label] = value
@@ -368,6 +380,10 @@ def parse_detail_page(soup: BeautifulSoup, url: str, name: str) -> dict:
         "Elhalálozás helye": "elhalalozes_helye",
         "Halál helye": "elhalalozes_helye",
         "Kivégzés helye": "elhalalozes_helye",
+        # cause of death
+        "Elhalálozás oka": "elhalalozes_oka",
+        "Halál oka": "elhalalozes_oka",
+        "Kivégzés módja": "elhalalozes_oka",
         # burial
         "Temetési/elföldelési helyszín": "temetes_helye",
         "Temetési helyszín": "temetes_helye",
