@@ -182,25 +182,49 @@ def parse_list_page(soup: BeautifulSoup) -> list[dict]:
             if not cells:
                 continue
 
-            # Person name is always in the first column — look there exclusively
-            # to avoid accidentally picking up criminal-proceedings links from
-            # later columns (which have proper slugs but are not person pages).
             first_cell = cells[0]
-            link_tag = first_cell.find("a", href=True)
+
+            # The title cell contains two <a> tags for published persons:
+            #   1. <a href="Raw Name"></a>       ← empty text, raw name as href
+            #   2. <a href="/slug" hreflang="hu">Name</a>  ← correct one
+            # Stub persons (not yet published) have NO link — only plain text
+            # like "Motil József [Budapest, 1935]".
+            #
+            # Always prefer the hreflang link; it has both the proper slug
+            # and the display name.
+            link_tag = first_cell.find("a", hreflang=True)
+            if not link_tag:
+                # Fallback for older/different page formats
+                link_tag = first_cell.find("a", href=lambda h: h and h.startswith("/"))
 
             if link_tag:
                 href = link_tag["href"]
                 name = link_tag.get_text(strip=True)
                 full_url = href_to_url(href)
+                birth_info = cells[1].get_text(strip=True) if len(cells) > 1 else ""
+                persons.append({"name": name, "url": full_url, "birth_info": birth_info})
             else:
-                # No <a> in first cell — derive URL from the cell's plain text
-                name = first_cell.get_text(strip=True)
-                if not name:
-                    continue
-                full_url = f"{BASE_URL}/{slugify_hu(name)}"
-
-            birth_info = cells[1].get_text(strip=True) if len(cells) > 1 else ""
-            persons.append({"name": name, "url": full_url, "birth_info": birth_info})
+                # Stub: no published page exists.
+                # Cell text format: "Name [City, Year]" or just "Name".
+                cell_text = first_cell.get_text(" ", strip=True)
+                m = re.match(r'^(.+?)\s*\[([^,\]]+),\s*(\d{4})\]\s*$', cell_text)
+                if m:
+                    name = m.group(1).strip()
+                    birth_city = m.group(2).strip()
+                    birth_year = m.group(3).strip()
+                else:
+                    name = cell_text
+                    birth_city = birth_year = ""
+                # Grab criminal proceedings text from column 3 (0-indexed)
+                proceedings = cells[3].get_text(strip=True) if len(cells) > 3 else ""
+                persons.append({
+                    "name": name,
+                    "url": None,
+                    "birth_info": birth_year,
+                    "birth_city": birth_city,
+                    "buntetoeljarasok": proceedings,
+                    "is_stub": True,
+                })
 
         if persons:
             return persons
@@ -523,6 +547,25 @@ def scrape(
 
             for person in persons:
                 person_url = person["url"]
+
+                # Stub persons have no published page — write what we know
+                # from the listing row and move on.
+                if person.get("is_stub"):
+                    stub_key = f"stub:{slugify_hu(person['name'])}"
+                    if stub_key in done_urls:
+                        continue
+                    record = {col: "" for col in COLUMNS}
+                    record["nev"] = person["name"]
+                    record["szuletesi_ido"] = person.get("birth_info", "")
+                    record["szuletesi_hely"] = person.get("birth_city", "")
+                    record["buntetoeljarasok"] = person.get("buntetoeljarasok", "")
+                    writer.writerow(record)
+                    csvfile.flush()
+                    done_urls.add(stub_key)
+                    total_scraped += 1
+                    log.info("Stub (no page): %s", person["name"])
+                    continue
+
                 if person_url in done_urls:
                     log.debug("Skipping already-scraped: %s", person_url)
                     continue
