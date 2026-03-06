@@ -168,12 +168,19 @@ def extract_city(institution: str) -> str | None:
 
 
 def parse_years(text: str) -> tuple[int | None, int | None]:
+    # "1951-1952" or "1951–1952"
     m = re.search(r"(\d{4})(?:\.\d{2})?\s*[-–]\s*(\d{4})(?:\.\d{2})?", text)
     if m:
         return int(m.group(1)), int(m.group(2))
+    # "1930.04.08." → birth date style, single year
     m = re.search(r"(\d{4})\.\d{2}\.\d{2}", text)
     if m:
         return int(m.group(1)), int(m.group(1))
+    # plain single year "1985"
+    m = re.match(r"^\d{4}$", text.strip())
+    if m:
+        y = int(m.group(0))
+        return y, y
     return None, None
 
 
@@ -194,7 +201,7 @@ def parse_record(html: str, prs_id: int) -> dict:
         "sources": [],
     }
 
-    # Name from <title>
+    # Name from <title>: "ÁBTL Archontológia - Ábrahám Lajos életrajzi adatok"
     title = soup.find("title")
     if title:
         name = (
@@ -202,20 +209,30 @@ def parse_record(html: str, prs_id: int) -> dict:
             .replace("ÁBTL Archontológia -", "")
             .replace("életrajzi adatok", "")
             .strip(" -")
+            .strip()
         )
         record["name"] = name or None
 
-    # Core biographical fields from label→value table rows
-    for table in soup.find_all("table"):
-        for row in table.find_all("tr"):
+    # Walk every <tr> once, deduplicate by cell-text tuple (tables are nested
+    # and the same rows appear in multiple ancestor tables).
+    seen: set[tuple[str, ...]] = set()
+
+    for row in soup.find_all("tr"):
+        cells = row.find_all("td", recursive=False)
+        # Some rows use nested <td> — fall back to all td children
+        if not cells:
             cells = row.find_all("td")
-            if len(cells) < 2:
-                continue
-            label = cells[0].get_text(strip=True)
-            value = cells[1].get_text(strip=True)
+        texts = tuple(c.get_text(strip=True) for c in cells)
+        if not any(texts) or texts in seen:
+            continue
+        seen.add(texts)
+
+        n = len(texts)
+
+        if n == 2:
+            label, value = texts
             if not value:
                 continue
-
             if "Anyja neve" in label:
                 record["mother"] = value
             elif "Született" in label:
@@ -227,56 +244,33 @@ def parse_record(html: str, prs_id: int) -> dict:
                 record["death_date"] = value
             elif "Megjegyzés" in label:
                 record["notes"] = value
+            elif "Forrás" in label:
+                record["sources"].append(value)
+            elif re.match(r"^\d{4}$", value) and label and not label.endswith(":"):
+                # Education row: [course_name, year]
+                record["education"].append({"name": label, "year": int(value)})
 
-    all_text = soup.get_text()
+        elif n == 4:
+            # Rank row: [rank_name, year, '', 'N/A']
+            rank, year_str, _, _ = texts
+            if rank and re.match(r"^\d{4}$", year_str):
+                record["ranks"].append({"rank": rank, "year": int(year_str)})
 
-    # Postings section
-    posting_match = re.search(
-        r"Foglalkoz[áa]sok,?\s*beosztások?:(.*?)(?:Forr[áa]sok?:|$)",
-        all_text, re.DOTALL,
-    )
-    if posting_match:
-        lines = [l.strip() for l in posting_match.group(1).split("\n") if l.strip()]
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            if re.search(r"\d{4}(?:\.\d{2})?\s*[-–]\s*\d{4}", line):
-                institution = lines[i - 1] if i > 0 else ""
-                role = lines[i + 1] if i + 1 < len(lines) else ""
-                city = extract_city(institution)
-                y_start, y_end = parse_years(line)
-                if institution and y_start:
-                    record["postings"].append({
-                        "institution": institution,
-                        "city": city,
-                        "year_start": y_start,
-                        "year_end": y_end,
-                        "role": role,
-                        "raw_years": line,
-                    })
-            i += 1
-
-    # Ranks section
-    rank_match = re.search(
-        r"Rendfokozatok?:(.*?)(?:Foglalkoz[áa]sok|$)",
-        all_text, re.DOTALL,
-    )
-    if rank_match:
-        lines = [l.strip() for l in rank_match.group(1).split("\n") if l.strip()]
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            ym = re.search(r"(\d{4})\s*[-–]\s*(\d{4})", line)
-            if ym:
-                rank = lines[i - 1] if i > 0 else ""
-                branch = lines[i + 1] if i + 1 < len(lines) else ""
-                record["ranks"].append({
-                    "rank": rank,
-                    "year_start": int(ym.group(1)),
-                    "year_end": int(ym.group(2)),
-                    "branch": branch,
+        elif n == 3:
+            # Posting row: [institution, years, role]
+            institution, years, role = texts
+            if not institution or "Forrás" in institution:
+                continue
+            y_start, y_end = parse_years(years)
+            if y_start:
+                record["postings"].append({
+                    "institution": institution,
+                    "city": extract_city(institution),
+                    "year_start": y_start,
+                    "year_end": y_end,
+                    "role": role if role != "N/A" else None,
+                    "raw_years": years,
                 })
-            i += 1
 
     return record
 
