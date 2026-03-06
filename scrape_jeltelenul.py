@@ -50,28 +50,28 @@ HEADERS = {
 # CSV column order
 COLUMNS = [
     "url",
-    "nev",                   # Name (from listing)
-    "nevvaltozat",           # Name variants
-    "szuletesi_ido",         # Date of birth
-    "szuletesi_hely",        # Place of birth
-    "lakohelyek",            # Place(s) of residence
-    "foglalkozasok",         # Occupation(s)
-    "eletrajzi_megjegyzes",  # Biographical note
-    "orizetbevetel_ideje",   # Date of arrest/detention
-    "terhelt_cselekmeny",    # Charges/acts attributed
-    "cselekmeny_helyszine",  # Location(s) of the act
-    "cselekmeny_minosites",  # Classification of the act
-    "buntetoeljarasok",      # Related criminal proceedings
-    "buntetoeljaras_link",   # Link to criminal proceedings
-    "bunteto_intezkedesek",  # Penal measures/sentences
-    "elhalalozes_ideje",     # Date of death
-    "elhalalozes_helye",     # Place of death
-    "elhalalozes_oka",       # Cause of death
-    "temetes_helye",         # Burial/interment place
-    "temetes_link",          # Link to burial place
-    "halotti_anyakonyvi_szam",  # Death registry number
-    "felhasznalt_forrasok",  # Sources used
-    "raw_fields",            # All other fields as JSON fallback
+    "name",
+    "name_variants",
+    "birth_date",
+    "birth_place",
+    "residences",
+    "occupations",
+    "biographical_note",
+    "date_of_arrest",
+    "charges",
+    "location_of_act",
+    "classification_of_act",
+    "criminal_proceedings",
+    "proceedings_link",
+    "penal_measures",
+    "date_of_death",
+    "place_of_death",
+    "cause_of_death",
+    "burial_place",
+    "burial_link",
+    "death_registry_number",
+    "sources",
+    "raw_fields",
 ]
 
 logging.basicConfig(
@@ -215,14 +215,21 @@ def parse_list_page(soup: BeautifulSoup) -> list[dict]:
                 else:
                     name = cell_text
                     birth_city = birth_year = ""
-                # Grab criminal proceedings text from column 3 (0-indexed)
-                proceedings = cells[3].get_text(strip=True) if len(cells) > 3 else ""
+                # Grab criminal proceedings text and link from column 3 (0-indexed)
+                proceedings = ""
+                proceedings_link = ""
+                if len(cells) > 3:
+                    proceedings = cells[3].get_text(strip=True)
+                    proc_a = cells[3].find("a", href=True)
+                    if proc_a:
+                        proceedings_link = href_to_url(proc_a["href"])
                 persons.append({
                     "name": name,
                     "url": None,
                     "birth_info": birth_year,
                     "birth_city": birth_city,
-                    "buntetoeljarasok": proceedings,
+                    "criminal_proceedings": proceedings,
+                    "proceedings_link": proceedings_link,
                     "is_stub": True,
                 })
 
@@ -293,77 +300,77 @@ def _clean_label(raw: str) -> str:
 # Defined at module level so it is not rebuilt on every page parse.
 FIELD_MAP: dict[str, str] = {
     # name / identity
-    "Névváltozat": "nevvaltozat",
-    "Névváltozatok": "nevvaltozat",
-    "Névváltozat(ok)": "nevvaltozat",
-    "Más névváltozat": "nevvaltozat",
+    "Névváltozat": "name_variants",
+    "Névváltozatok": "name_variants",
+    "Névváltozat(ok)": "name_variants",
+    "Más névváltozat": "name_variants",
     # birth
-    "Születési idő": "szuletesi_ido",
-    "Születési dátum": "szuletesi_ido",
-    "Született": "szuletesi_ido",
-    "Születési hely": "szuletesi_hely",
+    "Születési idő": "birth_date",
+    "Születési dátum": "birth_date",
+    "Született": "birth_date",
+    "Születési hely": "birth_place",
     # residence
-    "Lakóhely": "lakohelyek",
-    "Lakóhelyek": "lakohelyek",
-    "Lakhely": "lakohelyek",
+    "Lakóhely": "residences",
+    "Lakóhelyek": "residences",
+    "Lakhely": "residences",
     # occupation
-    "Foglalkozás": "foglalkozasok",
-    "Foglalkozások": "foglalkozasok",
-    "Foglalkozás(ok)": "foglalkozasok",
+    "Foglalkozás": "occupations",
+    "Foglalkozások": "occupations",
+    "Foglalkozás(ok)": "occupations",
     # biography
-    "Életrajzi megjegyzés": "eletrajzi_megjegyzes",
-    "Életrajzi megjegyzések": "eletrajzi_megjegyzes",
-    "Megjegyzés": "eletrajzi_megjegyzes",
+    "Életrajzi megjegyzés": "biographical_note",
+    "Életrajzi megjegyzések": "biographical_note",
+    "Megjegyzés": "biographical_note",
     # arrest
-    "Őrizetbevétel ideje": "orizetbevetel_ideje",
-    "Elfogás ideje": "orizetbevetel_ideje",
-    "Letartóztatás ideje": "orizetbevetel_ideje",
+    "Őrizetbevétel ideje": "date_of_arrest",
+    "Elfogás ideje": "date_of_arrest",
+    "Letartóztatás ideje": "date_of_arrest",
     # charges
-    "Terhére rótt cselekmény": "terhelt_cselekmeny",
-    "Terhére rótt cselekmény(ek)": "terhelt_cselekmeny",
-    "Vád": "terhelt_cselekmeny",
+    "Terhére rótt cselekmény": "charges",
+    "Terhére rótt cselekmény(ek)": "charges",
+    "Vád": "charges",
     # location of act
-    "A cselekmény helyszíne": "cselekmeny_helyszine",
-    "A cselekmény helyszíne(i)": "cselekmeny_helyszine",
-    "Cselekmény helyszíne": "cselekmeny_helyszine",
+    "A cselekmény helyszíne": "location_of_act",
+    "A cselekmény helyszíne(i)": "location_of_act",
+    "Cselekmény helyszíne": "location_of_act",
     # classification
-    "A cselekmény minősítése": "cselekmeny_minosites",
-    "A cselekmény minősítése(i)": "cselekmeny_minosites",
-    "Cselekmény minősítése": "cselekmeny_minosites",
+    "A cselekmény minősítése": "classification_of_act",
+    "A cselekmény minősítése(i)": "classification_of_act",
+    "Cselekmény minősítése": "classification_of_act",
     # criminal proceedings
-    "Büntetőeljárás": "buntetoeljarasok",
-    "Büntetőeljárások": "buntetoeljarasok",
-    "Kapcsolódó büntetőeljárás": "buntetoeljarasok",
+    "Büntetőeljárás": "criminal_proceedings",
+    "Büntetőeljárások": "criminal_proceedings",
+    "Kapcsolódó büntetőeljárás": "criminal_proceedings",
     # penal measure
-    "Büntetőintézkedés": "bunteto_intezkedesek",
-    "Büntetőintézkedések": "bunteto_intezkedesek",
-    "Büntetés": "bunteto_intezkedesek",
-    "Ítélet": "bunteto_intezkedesek",
+    "Büntetőintézkedés": "penal_measures",
+    "Büntetőintézkedések": "penal_measures",
+    "Büntetés": "penal_measures",
+    "Ítélet": "penal_measures",
     # death
-    "Elhalálozás ideje": "elhalalozes_ideje",
-    "Halál ideje": "elhalalozes_ideje",
-    "Kivégzés ideje": "elhalalozes_ideje",
-    "Elhunyt": "elhalalozes_ideje",
-    "Elhalálozás helye": "elhalalozes_helye",
-    "Halál helye": "elhalalozes_helye",
-    "Kivégzés helye": "elhalalozes_helye",
+    "Elhalálozás ideje": "date_of_death",
+    "Halál ideje": "date_of_death",
+    "Kivégzés ideje": "date_of_death",
+    "Elhunyt": "date_of_death",
+    "Elhalálozás helye": "place_of_death",
+    "Halál helye": "place_of_death",
+    "Kivégzés helye": "place_of_death",
     # cause of death
-    "Elhalálozás oka": "elhalalozes_oka",
-    "Halál oka": "elhalalozes_oka",
-    "Kivégzés módja": "elhalalozes_oka",
+    "Elhalálozás oka": "cause_of_death",
+    "Halál oka": "cause_of_death",
+    "Kivégzés módja": "cause_of_death",
     # burial
-    "Temetés helye": "temetes_helye",
-    "Temetési/elföldelési helyszín": "temetes_helye",
-    "Temetési helyszín": "temetes_helye",
-    "Elföldelés helye": "temetes_helye",
-    "Temető": "temetes_helye",
+    "Temetés helye": "burial_place",
+    "Temetési/elföldelési helyszín": "burial_place",
+    "Temetési helyszín": "burial_place",
+    "Elföldelés helye": "burial_place",
+    "Temető": "burial_place",
     # criminal trial name
-    "A büntetőper megnevezése": "buntetoeljarasok",
+    "A büntetőper megnevezése": "criminal_proceedings",
     # death registry
-    "Halotti anyakönyvi bejegyzés száma": "halotti_anyakonyvi_szam",
+    "Halotti anyakönyvi bejegyzés száma": "death_registry_number",
     # sources
-    "Felhasznált forrás(ok)": "felhasznalt_forrasok",
-    "Felhasznált források": "felhasznalt_forrasok",
+    "Felhasznált forrás(ok)": "sources",
+    "Felhasznált források": "sources",
 }
 
 
@@ -440,7 +447,7 @@ def _collect_raw_fields(soup: BeautifulSoup, url: str) -> dict[str, str]:
 def parse_detail_page(soup: BeautifulSoup, url: str, name: str) -> dict:
     record = {col: "" for col in COLUMNS}
     record["url"] = url
-    record["nev"] = name
+    record["name"] = name
 
     raw = _collect_raw_fields(soup, url)
 
@@ -463,18 +470,18 @@ def parse_detail_page(soup: BeautifulSoup, url: str, name: str) -> dict:
         link_text = link_tag.get_text(strip=True)
         full_link = href if href.startswith("http") else urljoin(BASE_URL, href)
         if "bunteto" in href.lower() or "eljárás" in link_text.lower():
-            record["buntetoeljaras_link"] += (full_link + " ")
+            record["proceedings_link"] += (full_link + " ")
         if "temeto" in href.lower() or "temetés" in link_text.lower() or "elföldelés" in link_text.lower():
-            record["temetes_link"] += (full_link + " ")
+            record["burial_link"] += (full_link + " ")
 
     # Clean up trailing spaces
-    for col in ("buntetoeljaras_link", "temetes_link"):
+    for col in ("proceedings_link", "burial_link"):
         record[col] = record[col].strip()
 
     # Try to pull name from <h1> if not populated
-    if not record["nev"]:
+    if not record["name"]:
         h1 = soup.find("h1")
-        record["nev"] = _text(h1)
+        record["name"] = _text(h1)
 
     return record
 
@@ -555,10 +562,11 @@ def scrape(
                     if stub_key in done_urls:
                         continue
                     record = {col: "" for col in COLUMNS}
-                    record["nev"] = person["name"]
-                    record["szuletesi_ido"] = person.get("birth_info", "")
-                    record["szuletesi_hely"] = person.get("birth_city", "")
-                    record["buntetoeljarasok"] = person.get("buntetoeljarasok", "")
+                    record["name"] = person["name"]
+                    record["birth_date"] = person.get("birth_info", "")
+                    record["birth_place"] = person.get("birth_city", "")
+                    record["criminal_proceedings"] = person.get("criminal_proceedings", "")
+                    record["proceedings_link"] = person.get("proceedings_link", "")
                     writer.writerow(record)
                     csvfile.flush()
                     done_urls.add(stub_key)
