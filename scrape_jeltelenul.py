@@ -15,8 +15,11 @@ import csv
 import json
 import logging
 import os
+import re
 import sys
 import time
+import unicodedata
+import urllib.parse
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 
@@ -109,6 +112,43 @@ def fetch(session: requests.Session, url: str, retries: int = 3) -> BeautifulSou
 
 
 # ---------------------------------------------------------------------------
+# URL helpers
+# ---------------------------------------------------------------------------
+
+def slugify_hu(text: str) -> str:
+    """
+    Convert a Hungarian name/text to a URL-safe slug.
+    e.g. "Ábrahám József" → "abraham-jozsef"
+    """
+    # NFD decomposition lets us strip combining diacritical marks (accents)
+    normalized = unicodedata.normalize("NFD", text)
+    stripped = "".join(c for c in normalized if unicodedata.category(c) != "Mn")
+    lowered = stripped.lower()
+    slugged = re.sub(r"[^a-z0-9]+", "-", lowered)
+    return slugged.strip("-")
+
+
+def href_to_url(href: str) -> str:
+    """
+    Convert an href attribute value to a proper absolute URL.
+
+    Handles three cases observed on jeltelenul.hu:
+      1. Already absolute: "https://jeltelenul.hu/rubletzky-geza"
+      2. Proper relative path: "/node/731" or "/abonyi-ferenc"
+      3. Raw Hungarian name used as href: "Abonyi Ferenc" (no leading slash)
+         → slugified to "https://jeltelenul.hu/abonyi-ferenc"
+    """
+    href = href.strip()
+    if href.startswith("http"):
+        return href
+    if href.startswith("/"):
+        # Percent-encode any spaces/special chars in the path while keeping / intact
+        return urljoin(BASE_URL, urllib.parse.quote(href, safe="/:?=&#"))
+    # No leading slash → treat as a display name, slugify to build the path alias
+    return f"{BASE_URL}/{slugify_hu(href)}"
+
+
+# ---------------------------------------------------------------------------
 # Listing page helpers
 # ---------------------------------------------------------------------------
 
@@ -138,36 +178,48 @@ def parse_list_page(soup: BeautifulSoup) -> list[dict]:
             cells = row.find_all("td")
             if not cells:
                 continue
-            link_tag = row.find("a", href=True)
+
+            # Person name is always in the first column — look there exclusively
+            # to avoid accidentally picking up criminal-proceedings links from
+            # later columns (which have proper slugs but are not person pages).
+            first_cell = cells[0]
+            link_tag = first_cell.find("a", href=True)
+
             if link_tag:
                 href = link_tag["href"]
-                full_url = href if href.startswith("http") else urljoin(BASE_URL, href)
                 name = link_tag.get_text(strip=True)
-                # Get birth year from second cell if available
-                birth_info = cells[1].get_text(strip=True) if len(cells) > 1 else ""
-                persons.append({"name": name, "url": full_url, "birth_info": birth_info})
-        return persons
+                full_url = href_to_url(href)
+            else:
+                # No <a> in first cell — derive URL from the cell's plain text
+                name = first_cell.get_text(strip=True)
+                if not name:
+                    continue
+                full_url = f"{BASE_URL}/{slugify_hu(name)}"
+
+            birth_info = cells[1].get_text(strip=True) if len(cells) > 1 else ""
+            persons.append({"name": name, "url": full_url, "birth_info": birth_info})
+
+        if persons:
+            return persons
 
     # --- Div-based layout ---
     for row in soup.find_all("div", class_=lambda c: c and "views-row" in c):
         link_tag = row.find("a", href=True)
         if link_tag:
             href = link_tag["href"]
-            full_url = href if href.startswith("http") else urljoin(BASE_URL, href)
             name = link_tag.get_text(strip=True)
-            persons.append({"name": name, "url": full_url, "birth_info": ""})
+            persons.append({"name": name, "url": href_to_url(href), "birth_info": ""})
 
-    # --- Fallback: any link that points to /node/ or a person slug ---
+    # --- Fallback: any link that points to /node/ or a single-segment path ---
     if not persons:
         for link_tag in soup.find_all("a", href=True):
             href = link_tag["href"]
             if "/node/" in href or (
                 href.startswith("/") and href.count("/") == 1 and len(href) > 5
             ):
-                full_url = href if href.startswith("http") else urljoin(BASE_URL, href)
                 name = link_tag.get_text(strip=True)
                 if name:
-                    persons.append({"name": name, "url": full_url, "birth_info": ""})
+                    persons.append({"name": name, "url": href_to_url(href), "birth_info": ""})
 
     return persons
 
