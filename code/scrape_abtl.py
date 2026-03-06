@@ -286,7 +286,7 @@ def parse_record(html: str, prs_id: int) -> dict:
 # ---------------------------------------------------------------------------
 
 def scrape_record(http: requests.Session, prs_id: int) -> dict | None:
-    url = f"{BASE}?p=108:5:::::{prs_id}:P5_PRS_ID:{prs_id}"
+    url = f"{BASE}?p=108:5:::::P5_PRS_ID:{prs_id}"
     try:
         r = http.get(url, timeout=15)
         r.raise_for_status()
