@@ -13,6 +13,9 @@ build/
 data/*.csv
 data/*.json
 data/*.log
+*.csv
+*.log
+*_checkpoint.json
 
 # Virtual environments
 .venv/
