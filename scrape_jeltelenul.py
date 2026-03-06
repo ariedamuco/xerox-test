@@ -69,6 +69,8 @@ COLUMNS = [
     "elhalalozes_oka",       # Cause of death
     "temetes_helye",         # Burial/interment place
     "temetes_link",          # Link to burial place
+    "halotti_anyakonyvi_szam",  # Death registry number
+    "felhasznalt_forrasok",  # Sources used
     "raw_fields",            # All other fields as JSON fallback
 ]
 
@@ -326,90 +328,82 @@ FIELD_MAP: dict[str, str] = {
     "Halál oka": "elhalalozes_oka",
     "Kivégzés módja": "elhalalozes_oka",
     # burial
+    "Temetés helye": "temetes_helye",
     "Temetési/elföldelési helyszín": "temetes_helye",
     "Temetési helyszín": "temetes_helye",
     "Elföldelés helye": "temetes_helye",
     "Temető": "temetes_helye",
+    # criminal trial name
+    "A büntetőper megnevezése": "buntetoeljarasok",
+    # death registry
+    "Halotti anyakönyvi bejegyzés száma": "halotti_anyakonyvi_szam",
+    # sources
+    "Felhasznált forrás(ok)": "felhasznalt_forrasok",
+    "Felhasznált források": "felhasznalt_forrasok",
 }
 
 
 def _collect_raw_fields(soup: BeautifulSoup, url: str) -> dict[str, str]:
     """
-    Extract every label→value pair from a detail page using four independent
-    strategies so we are resilient to whatever HTML the theme produces.
+    Extract every label→value pair from a detail page.
 
-    Priority: later strategies only fill in keys not already found.
+    The site runs Drupal 9/10 whose field markup uses double-hyphen BEM
+    notation (field--name-*, field__label, field__items, field__item),
+    quite different from the Drupal 7 single-hyphen/underscore conventions.
+
+    Two structural patterns appear on jeltelenul.hu:
+
+    A) Standard labelled field
+       <div class="field field--name-field-szuletesi-ido …">
+         <div class="field__label">Születési idő</div>
+         <div class="field__item"><time …>1931. 08. 15.</time></div>
+       </div>
+
+    B) combined_data wrapper (birth place, residence — label + city + county)
+       <div class="combined_data">
+         <div class="title">Születési hely:</div>
+         <div class="field … field__item">Dorog</div>
+         <div class="field … field__item">Komárom-Esztergom vármegye</div>
+       </div>
     """
     raw: dict[str, str] = {}
 
     def add(label: str, value: str) -> None:
         label = _clean_label(label)
-        if label and label not in raw:
+        if label and value and label not in raw:
             raw[label] = value
 
-    # 1. Standard Drupal 7 field divs
-    #    <div class="field field-name-field-szuletesi-hely …">
-    #      <div class="field-label">Születési hely:&nbsp;</div>
-    #      <div class="field-items"><div class="field-item even">Budapest</div></div>
-    #    </div>
-    for field_div in soup.find_all("div", class_=lambda c: c and "field-name-" in c):
-        label_tag = field_div.find(class_=lambda c: c and "field-label" in c)
+    # Pattern B — combined_data (must run first; its child field divs have
+    # field--label-hidden so pattern A won't pick them up anyway, but
+    # running B first keeps the combined value intact)
+    for combined in soup.find_all("div", class_="combined_data"):
+        title = combined.find("div", class_="title")
+        if not title:
+            continue
+        # All direct child divs that carry the field__item class are the values
+        child_values = [
+            _text(d) for d in combined.find_all("div", recursive=False)
+            if "field__item" in (d.get("class") or [])
+        ]
+        add(title.get_text(strip=True), ", ".join(v for v in child_values if v))
+
+    # Pattern A — standard Drupal 9/10 field divs (field--name-*)
+    for field_div in soup.find_all("div", class_=lambda c: c and "field--name-" in c):
+        label_tag = field_div.find("div", class_="field__label", recursive=False)
         if not label_tag:
             continue
-        items_tag = field_div.find(class_=lambda c: c and "field-items" in c)
-        if items_tag:
-            values = [_text(i) for i in items_tag.find_all(
-                class_=lambda c: c and "field-item" in c
-            )]
-            value = " | ".join(v for v in values if v)
+        items_wrapper = field_div.find("div", class_="field__items", recursive=False)
+        if items_wrapper:
+            # Multi-value: only direct field__item children to avoid duplicates
+            # from nested reference fields (e.g. field--name-field-telepulesnev)
+            vals = [_text(d) for d in items_wrapper.find_all("div", recursive=False)
+                    if "field__item" in (d.get("class") or [])]
         else:
-            value = _text(field_div)
+            # Single-value: one field__item child (may contain <time>, <p>, etc.)
+            vals = [_text(d) for d in field_div.find_all("div", recursive=False)
+                    if "field__item" in (d.get("class") or [])]
+        value = " | ".join(v for v in vals if v)
         add(label_tag.get_text(strip=True), value)
-
-    # 2. Drupal Views field cells (list/table Views output)
-    #    <td class="views-field views-field-field-szuletesi-hely">…</td>
-    for cell in soup.find_all(class_=lambda c: c and "views-field-field-" in c):
-        css = " ".join(cell.get("class", []))
-        # derive a label from the CSS class name
-        field_name = re.search(r"views-field-field-([\w-]+)", css)
-        if not field_name:
-            continue
-        label_from_css = field_name.group(1).replace("-", " ").title()
-        label_tag = cell.find(class_=lambda c: c and "views-label" in c)
-        label = label_tag.get_text(strip=True) if label_tag else label_from_css
-        value = _text(cell)
-        # strip the label prefix from the value if it echoes it
-        if value.startswith(label):
-            value = value[len(label):].strip()
-        add(label, value)
-
-    # 3. Two-cell table rows  <tr><th>Label:</th><td>Value</td></tr>
-    for row in soup.find_all("tr"):
-        cells = row.find_all(["th", "td"])
-        if len(cells) == 2:
-            add(cells[0].get_text(strip=True), _text(cells[1]))
-
-    # 4. Definition lists  <dl><dt>Label:</dt><dd>Value</dd></dl>
-    for dl in soup.find_all("dl"):
-        for dt, dd in zip(dl.find_all("dt"), dl.find_all("dd")):
-            add(dt.get_text(strip=True), _text(dd))
-
-    # 5. <strong> or <b> inline labels followed by sibling text
-    #    e.g.  <p><strong>Születési hely:</strong> Budapest</p>
-    for bold in soup.find_all(["strong", "b"]):
-        label_text = bold.get_text(strip=True)
-        if not label_text.endswith((":", "\xa0")):
-            continue
-        # value is the text immediately after the bold tag
-        nxt = bold.next_sibling
-        if nxt and isinstance(nxt, str):
-            value = nxt.strip()
-        elif nxt:
-            value = _text(nxt)
-        else:
-            value = ""
-        if value:
-            add(label_text, value)
 
     if not raw:
         log.warning("No labelled fields found on %s — page structure unknown", url)
