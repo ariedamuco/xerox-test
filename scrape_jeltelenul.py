@@ -50,26 +50,28 @@ HEADERS = {
 # CSV column order
 COLUMNS = [
     "url",
-    "nev",                   # Name (from listing)
-    "nevvaltozat",           # Name variants
-    "szuletesi_ido",         # Date of birth
-    "szuletesi_hely",        # Place of birth
-    "lakohelyek",            # Place(s) of residence
-    "foglalkozasok",         # Occupation(s)
-    "eletrajzi_megjegyzes",  # Biographical note
-    "orizetbevetel_ideje",   # Date of arrest/detention
-    "terhelt_cselekmeny",    # Charges/acts attributed
-    "cselekmeny_helyszine",  # Location(s) of the act
-    "cselekmeny_minosites",  # Classification of the act
-    "buntetoeljarasok",      # Related criminal proceedings
-    "buntetoeljaras_link",   # Link to criminal proceedings
-    "bunteto_intezkedesek",  # Penal measures/sentences
-    "elhalalozes_ideje",     # Date of death
-    "elhalalozes_helye",     # Place of death
-    "elhalalozes_oka",       # Cause of death
-    "temetes_helye",         # Burial/interment place
-    "temetes_link",          # Link to burial place
-    "raw_fields",            # All other fields as JSON fallback
+    "name",
+    "name_variants",
+    "birth_date",
+    "birth_place",
+    "residences",
+    "occupations",
+    "biographical_note",
+    "date_of_arrest",
+    "charges",
+    "location_of_act",
+    "classification_of_act",
+    "criminal_proceedings",
+    "proceedings_link",
+    "penal_measures",
+    "date_of_death",
+    "place_of_death",
+    "cause_of_death",
+    "burial_place",
+    "burial_link",
+    "death_registry_number",
+    "sources",
+    "raw_fields",
 ]
 
 logging.basicConfig(
@@ -180,25 +182,56 @@ def parse_list_page(soup: BeautifulSoup) -> list[dict]:
             if not cells:
                 continue
 
-            # Person name is always in the first column — look there exclusively
-            # to avoid accidentally picking up criminal-proceedings links from
-            # later columns (which have proper slugs but are not person pages).
             first_cell = cells[0]
-            link_tag = first_cell.find("a", href=True)
+
+            # The title cell contains two <a> tags for published persons:
+            #   1. <a href="Raw Name"></a>       ← empty text, raw name as href
+            #   2. <a href="/slug" hreflang="hu">Name</a>  ← correct one
+            # Stub persons (not yet published) have NO link — only plain text
+            # like "Motil József [Budapest, 1935]".
+            #
+            # Always prefer the hreflang link; it has both the proper slug
+            # and the display name.
+            link_tag = first_cell.find("a", hreflang=True)
+            if not link_tag:
+                # Fallback for older/different page formats
+                link_tag = first_cell.find("a", href=lambda h: h and h.startswith("/"))
 
             if link_tag:
                 href = link_tag["href"]
                 name = link_tag.get_text(strip=True)
                 full_url = href_to_url(href)
+                birth_info = cells[1].get_text(strip=True) if len(cells) > 1 else ""
+                persons.append({"name": name, "url": full_url, "birth_info": birth_info})
             else:
-                # No <a> in first cell — derive URL from the cell's plain text
-                name = first_cell.get_text(strip=True)
-                if not name:
-                    continue
-                full_url = f"{BASE_URL}/{slugify_hu(name)}"
-
-            birth_info = cells[1].get_text(strip=True) if len(cells) > 1 else ""
-            persons.append({"name": name, "url": full_url, "birth_info": birth_info})
+                # Stub: no published page exists.
+                # Cell text format: "Name [City, Year]" or just "Name".
+                cell_text = first_cell.get_text(" ", strip=True)
+                m = re.match(r'^(.+?)\s*\[([^,\]]+),\s*(\d{4})\]\s*$', cell_text)
+                if m:
+                    name = m.group(1).strip()
+                    birth_city = m.group(2).strip()
+                    birth_year = m.group(3).strip()
+                else:
+                    name = cell_text
+                    birth_city = birth_year = ""
+                # Grab criminal proceedings text and link from column 3 (0-indexed)
+                proceedings = ""
+                proceedings_link = ""
+                if len(cells) > 3:
+                    proceedings = cells[3].get_text(strip=True)
+                    proc_a = cells[3].find("a", href=True)
+                    if proc_a:
+                        proceedings_link = href_to_url(proc_a["href"])
+                persons.append({
+                    "name": name,
+                    "url": None,
+                    "birth_info": birth_year,
+                    "birth_city": birth_city,
+                    "criminal_proceedings": proceedings,
+                    "proceedings_link": proceedings_link,
+                    "is_stub": True,
+                })
 
         if persons:
             return persons
@@ -267,149 +300,141 @@ def _clean_label(raw: str) -> str:
 # Defined at module level so it is not rebuilt on every page parse.
 FIELD_MAP: dict[str, str] = {
     # name / identity
-    "Névváltozat": "nevvaltozat",
-    "Névváltozatok": "nevvaltozat",
-    "Névváltozat(ok)": "nevvaltozat",
-    "Más névváltozat": "nevvaltozat",
+    "Névváltozat": "name_variants",
+    "Névváltozatok": "name_variants",
+    "Névváltozat(ok)": "name_variants",
+    "Más névváltozat": "name_variants",
     # birth
-    "Születési idő": "szuletesi_ido",
-    "Születési dátum": "szuletesi_ido",
-    "Született": "szuletesi_ido",
-    "Születési hely": "szuletesi_hely",
+    "Születési idő": "birth_date",
+    "Születési dátum": "birth_date",
+    "Született": "birth_date",
+    "Születési hely": "birth_place",
     # residence
-    "Lakóhely": "lakohelyek",
-    "Lakóhelyek": "lakohelyek",
-    "Lakhely": "lakohelyek",
+    "Lakóhely": "residences",
+    "Lakóhelyek": "residences",
+    "Lakhely": "residences",
     # occupation
-    "Foglalkozás": "foglalkozasok",
-    "Foglalkozások": "foglalkozasok",
-    "Foglalkozás(ok)": "foglalkozasok",
+    "Foglalkozás": "occupations",
+    "Foglalkozások": "occupations",
+    "Foglalkozás(ok)": "occupations",
     # biography
-    "Életrajzi megjegyzés": "eletrajzi_megjegyzes",
-    "Életrajzi megjegyzések": "eletrajzi_megjegyzes",
-    "Megjegyzés": "eletrajzi_megjegyzes",
+    "Életrajzi megjegyzés": "biographical_note",
+    "Életrajzi megjegyzések": "biographical_note",
+    "Megjegyzés": "biographical_note",
     # arrest
-    "Őrizetbevétel ideje": "orizetbevetel_ideje",
-    "Elfogás ideje": "orizetbevetel_ideje",
-    "Letartóztatás ideje": "orizetbevetel_ideje",
+    "Őrizetbevétel ideje": "date_of_arrest",
+    "Elfogás ideje": "date_of_arrest",
+    "Letartóztatás ideje": "date_of_arrest",
     # charges
-    "Terhére rótt cselekmény": "terhelt_cselekmeny",
-    "Terhére rótt cselekmény(ek)": "terhelt_cselekmeny",
-    "Vád": "terhelt_cselekmeny",
+    "Terhére rótt cselekmény": "charges",
+    "Terhére rótt cselekmény(ek)": "charges",
+    "Vád": "charges",
     # location of act
-    "A cselekmény helyszíne": "cselekmeny_helyszine",
-    "A cselekmény helyszíne(i)": "cselekmeny_helyszine",
-    "Cselekmény helyszíne": "cselekmeny_helyszine",
+    "A cselekmény helyszíne": "location_of_act",
+    "A cselekmény helyszíne(i)": "location_of_act",
+    "Cselekmény helyszíne": "location_of_act",
     # classification
-    "A cselekmény minősítése": "cselekmeny_minosites",
-    "A cselekmény minősítése(i)": "cselekmeny_minosites",
-    "Cselekmény minősítése": "cselekmeny_minosites",
+    "A cselekmény minősítése": "classification_of_act",
+    "A cselekmény minősítése(i)": "classification_of_act",
+    "Cselekmény minősítése": "classification_of_act",
     # criminal proceedings
-    "Büntetőeljárás": "buntetoeljarasok",
-    "Büntetőeljárások": "buntetoeljarasok",
-    "Kapcsolódó büntetőeljárás": "buntetoeljarasok",
+    "Büntetőeljárás": "criminal_proceedings",
+    "Büntetőeljárások": "criminal_proceedings",
+    "Kapcsolódó büntetőeljárás": "criminal_proceedings",
     # penal measure
-    "Büntetőintézkedés": "bunteto_intezkedesek",
-    "Büntetőintézkedések": "bunteto_intezkedesek",
-    "Büntetés": "bunteto_intezkedesek",
-    "Ítélet": "bunteto_intezkedesek",
+    "Büntetőintézkedés": "penal_measures",
+    "Büntetőintézkedések": "penal_measures",
+    "Büntetés": "penal_measures",
+    "Ítélet": "penal_measures",
     # death
-    "Elhalálozás ideje": "elhalalozes_ideje",
-    "Halál ideje": "elhalalozes_ideje",
-    "Kivégzés ideje": "elhalalozes_ideje",
-    "Elhunyt": "elhalalozes_ideje",
-    "Elhalálozás helye": "elhalalozes_helye",
-    "Halál helye": "elhalalozes_helye",
-    "Kivégzés helye": "elhalalozes_helye",
+    "Elhalálozás ideje": "date_of_death",
+    "Halál ideje": "date_of_death",
+    "Kivégzés ideje": "date_of_death",
+    "Elhunyt": "date_of_death",
+    "Elhalálozás helye": "place_of_death",
+    "Halál helye": "place_of_death",
+    "Kivégzés helye": "place_of_death",
     # cause of death
-    "Elhalálozás oka": "elhalalozes_oka",
-    "Halál oka": "elhalalozes_oka",
-    "Kivégzés módja": "elhalalozes_oka",
+    "Elhalálozás oka": "cause_of_death",
+    "Halál oka": "cause_of_death",
+    "Kivégzés módja": "cause_of_death",
     # burial
-    "Temetési/elföldelési helyszín": "temetes_helye",
-    "Temetési helyszín": "temetes_helye",
-    "Elföldelés helye": "temetes_helye",
-    "Temető": "temetes_helye",
+    "Temetés helye": "burial_place",
+    "Temetési/elföldelési helyszín": "burial_place",
+    "Temetési helyszín": "burial_place",
+    "Elföldelés helye": "burial_place",
+    "Temető": "burial_place",
+    # criminal trial name
+    "A büntetőper megnevezése": "criminal_proceedings",
+    # death registry
+    "Halotti anyakönyvi bejegyzés száma": "death_registry_number",
+    # sources
+    "Felhasznált forrás(ok)": "sources",
+    "Felhasznált források": "sources",
 }
 
 
 def _collect_raw_fields(soup: BeautifulSoup, url: str) -> dict[str, str]:
     """
-    Extract every label→value pair from a detail page using four independent
-    strategies so we are resilient to whatever HTML the theme produces.
+    Extract every label→value pair from a detail page.
 
-    Priority: later strategies only fill in keys not already found.
+    The site runs Drupal 9/10 whose field markup uses double-hyphen BEM
+    notation (field--name-*, field__label, field__items, field__item),
+    quite different from the Drupal 7 single-hyphen/underscore conventions.
+
+    Two structural patterns appear on jeltelenul.hu:
+
+    A) Standard labelled field
+       <div class="field field--name-field-szuletesi-ido …">
+         <div class="field__label">Születési idő</div>
+         <div class="field__item"><time …>1931. 08. 15.</time></div>
+       </div>
+
+    B) combined_data wrapper (birth place, residence — label + city + county)
+       <div class="combined_data">
+         <div class="title">Születési hely:</div>
+         <div class="field … field__item">Dorog</div>
+         <div class="field … field__item">Komárom-Esztergom vármegye</div>
+       </div>
     """
     raw: dict[str, str] = {}
 
     def add(label: str, value: str) -> None:
         label = _clean_label(label)
-        if label and label not in raw:
+        if label and value and label not in raw:
             raw[label] = value
 
-    # 1. Standard Drupal 7 field divs
-    #    <div class="field field-name-field-szuletesi-hely …">
-    #      <div class="field-label">Születési hely:&nbsp;</div>
-    #      <div class="field-items"><div class="field-item even">Budapest</div></div>
-    #    </div>
-    for field_div in soup.find_all("div", class_=lambda c: c and "field-name-" in c):
-        label_tag = field_div.find(class_=lambda c: c and "field-label" in c)
+    # Pattern B — combined_data (must run first; its child field divs have
+    # field--label-hidden so pattern A won't pick them up anyway, but
+    # running B first keeps the combined value intact)
+    for combined in soup.find_all("div", class_="combined_data"):
+        title = combined.find("div", class_="title")
+        if not title:
+            continue
+        # All direct child divs that carry the field__item class are the values
+        child_values = [
+            _text(d) for d in combined.find_all("div", recursive=False)
+            if "field__item" in (d.get("class") or [])
+        ]
+        add(title.get_text(strip=True), ", ".join(v for v in child_values if v))
+
+    # Pattern A — standard Drupal 9/10 field divs (field--name-*)
+    for field_div in soup.find_all("div", class_=lambda c: c and "field--name-" in c):
+        label_tag = field_div.find("div", class_="field__label", recursive=False)
         if not label_tag:
             continue
-        items_tag = field_div.find(class_=lambda c: c and "field-items" in c)
-        if items_tag:
-            values = [_text(i) for i in items_tag.find_all(
-                class_=lambda c: c and "field-item" in c
-            )]
-            value = " | ".join(v for v in values if v)
+        items_wrapper = field_div.find("div", class_="field__items", recursive=False)
+        if items_wrapper:
+            # Multi-value: only direct field__item children to avoid duplicates
+            # from nested reference fields (e.g. field--name-field-telepulesnev)
+            vals = [_text(d) for d in items_wrapper.find_all("div", recursive=False)
+                    if "field__item" in (d.get("class") or [])]
         else:
-            value = _text(field_div)
+            # Single-value: one field__item child (may contain <time>, <p>, etc.)
+            vals = [_text(d) for d in field_div.find_all("div", recursive=False)
+                    if "field__item" in (d.get("class") or [])]
+        value = " | ".join(v for v in vals if v)
         add(label_tag.get_text(strip=True), value)
-
-    # 2. Drupal Views field cells (list/table Views output)
-    #    <td class="views-field views-field-field-szuletesi-hely">…</td>
-    for cell in soup.find_all(class_=lambda c: c and "views-field-field-" in c):
-        css = " ".join(cell.get("class", []))
-        # derive a label from the CSS class name
-        field_name = re.search(r"views-field-field-([\w-]+)", css)
-        if not field_name:
-            continue
-        label_from_css = field_name.group(1).replace("-", " ").title()
-        label_tag = cell.find(class_=lambda c: c and "views-label" in c)
-        label = label_tag.get_text(strip=True) if label_tag else label_from_css
-        value = _text(cell)
-        # strip the label prefix from the value if it echoes it
-        if value.startswith(label):
-            value = value[len(label):].strip()
-        add(label, value)
-
-    # 3. Two-cell table rows  <tr><th>Label:</th><td>Value</td></tr>
-    for row in soup.find_all("tr"):
-        cells = row.find_all(["th", "td"])
-        if len(cells) == 2:
-            add(cells[0].get_text(strip=True), _text(cells[1]))
-
-    # 4. Definition lists  <dl><dt>Label:</dt><dd>Value</dd></dl>
-    for dl in soup.find_all("dl"):
-        for dt, dd in zip(dl.find_all("dt"), dl.find_all("dd")):
-            add(dt.get_text(strip=True), _text(dd))
-
-    # 5. <strong> or <b> inline labels followed by sibling text
-    #    e.g.  <p><strong>Születési hely:</strong> Budapest</p>
-    for bold in soup.find_all(["strong", "b"]):
-        label_text = bold.get_text(strip=True)
-        if not label_text.endswith((":", "\xa0")):
-            continue
-        # value is the text immediately after the bold tag
-        nxt = bold.next_sibling
-        if nxt and isinstance(nxt, str):
-            value = nxt.strip()
-        elif nxt:
-            value = _text(nxt)
-        else:
-            value = ""
-        if value:
-            add(label_text, value)
 
     if not raw:
         log.warning("No labelled fields found on %s — page structure unknown", url)
@@ -422,7 +447,7 @@ def _collect_raw_fields(soup: BeautifulSoup, url: str) -> dict[str, str]:
 def parse_detail_page(soup: BeautifulSoup, url: str, name: str) -> dict:
     record = {col: "" for col in COLUMNS}
     record["url"] = url
-    record["nev"] = name
+    record["name"] = name
 
     raw = _collect_raw_fields(soup, url)
 
@@ -445,18 +470,18 @@ def parse_detail_page(soup: BeautifulSoup, url: str, name: str) -> dict:
         link_text = link_tag.get_text(strip=True)
         full_link = href if href.startswith("http") else urljoin(BASE_URL, href)
         if "bunteto" in href.lower() or "eljárás" in link_text.lower():
-            record["buntetoeljaras_link"] += (full_link + " ")
+            record["proceedings_link"] += (full_link + " ")
         if "temeto" in href.lower() or "temetés" in link_text.lower() or "elföldelés" in link_text.lower():
-            record["temetes_link"] += (full_link + " ")
+            record["burial_link"] += (full_link + " ")
 
     # Clean up trailing spaces
-    for col in ("buntetoeljaras_link", "temetes_link"):
+    for col in ("proceedings_link", "burial_link"):
         record[col] = record[col].strip()
 
     # Try to pull name from <h1> if not populated
-    if not record["nev"]:
+    if not record["name"]:
         h1 = soup.find("h1")
-        record["nev"] = _text(h1)
+        record["name"] = _text(h1)
 
     return record
 
@@ -529,6 +554,26 @@ def scrape(
 
             for person in persons:
                 person_url = person["url"]
+
+                # Stub persons have no published page — write what we know
+                # from the listing row and move on.
+                if person.get("is_stub"):
+                    stub_key = f"stub:{slugify_hu(person['name'])}"
+                    if stub_key in done_urls:
+                        continue
+                    record = {col: "" for col in COLUMNS}
+                    record["name"] = person["name"]
+                    record["birth_date"] = person.get("birth_info", "")
+                    record["birth_place"] = person.get("birth_city", "")
+                    record["criminal_proceedings"] = person.get("criminal_proceedings", "")
+                    record["proceedings_link"] = person.get("proceedings_link", "")
+                    writer.writerow(record)
+                    csvfile.flush()
+                    done_urls.add(stub_key)
+                    total_scraped += 1
+                    log.info("Stub (no page): %s", person["name"])
+                    continue
+
                 if person_url in done_urls:
                     log.debug("Skipping already-scraped: %s", person_url)
                     continue

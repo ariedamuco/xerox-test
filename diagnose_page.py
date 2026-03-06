@@ -1,6 +1,10 @@
 """
-Run this on your machine to dump the actual HTML structure of a person page.
-Usage: python diagnose_page.py https://jeltelenul.hu/csiky-lajos
+Diagnose jeltelenul.hu page structure.
+
+Works for both listing pages and detail pages.
+Usage:
+  python diagnose_page.py https://jeltelenul.hu/csiky-lajos
+  python diagnose_page.py "https://jeltelenul.hu/szemelyek?order=title&sort=asc&page=25"
 """
 import sys
 import requests
@@ -20,16 +24,24 @@ print("=== <h1> ===")
 for t in soup.find_all("h1"):
     print(" ", t.get_text(strip=True))
 
+# ── Listing page: show every table row with hrefs ────────────────────────────
+print("\n=== <table> rows (text + hrefs) ===")
+for table in soup.find_all("table"):
+    for i, row in enumerate(table.find_all("tr")):
+        cells = row.find_all(["th", "td"])
+        if not cells:
+            continue
+        row_data = []
+        for cell in cells:
+            text = cell.get_text(" ", strip=True)[:60]
+            links = [a["href"] for a in cell.find_all("a", href=True)]
+            row_data.append(f"{text!r} links={links}")
+        print(f"  row {i}: {' | '.join(row_data)}")
+
+# ── Detail page: show all field divs ─────────────────────────────────────────
 print("\n=== divs with 'field' in class ===")
 for div in soup.find_all("div", class_=lambda c: c and "field" in c):
     print(f"  classes={div.get('class')}  text={div.get_text(' ', strip=True)[:120]!r}")
-
-print("\n=== <table> rows ===")
-for table in soup.find_all("table"):
-    for row in table.find_all("tr"):
-        cells = [c.get_text(" ", strip=True) for c in row.find_all(["th","td"])]
-        if cells:
-            print(" ", cells)
 
 print("\n=== <dl> terms + descriptions ===")
 for dl in soup.find_all("dl"):
