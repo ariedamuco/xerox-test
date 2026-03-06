@@ -333,32 +333,30 @@ FIELD_MAP: dict[str, str] = {
 }
 
 
-def parse_detail_page(soup: BeautifulSoup, url: str, name: str) -> dict:
+def _collect_raw_fields(soup: BeautifulSoup, url: str) -> dict[str, str]:
     """
-    Extract all relevant fields from an individual person detail page.
+    Extract every label→value pair from a detail page using four independent
+    strategies so we are resilient to whatever HTML the theme produces.
 
-    Drupal field markup uses patterns like:
-      <div class="field field-name-field-szuletesi-hely ...">
-        <div class="field-label">Születési hely:&nbsp;</div>
-        <div class="field-items">
-          <div class="field-item even">Budapest</div>
-        </div>
-      </div>
+    Priority: later strategies only fill in keys not already found.
     """
-    record = {col: "" for col in COLUMNS}
-    record["url"] = url
-    record["nev"] = name
+    raw: dict[str, str] = {}
 
-    # Collect all labelled fields into a dict for flexible mapping
-    raw = {}
+    def add(label: str, value: str) -> None:
+        label = _clean_label(label)
+        if label and label not in raw:
+            raw[label] = value
 
-    # --- Drupal field divs ---
+    # 1. Standard Drupal 7 field divs
+    #    <div class="field field-name-field-szuletesi-hely …">
+    #      <div class="field-label">Születési hely:&nbsp;</div>
+    #      <div class="field-items"><div class="field-item even">Budapest</div></div>
+    #    </div>
     for field_div in soup.find_all("div", class_=lambda c: c and "field-name-" in c):
         label_tag = field_div.find(class_=lambda c: c and "field-label" in c)
-        items_tag = field_div.find(class_=lambda c: c and "field-items" in c)
         if not label_tag:
             continue
-        label = _clean_label(label_tag.get_text(strip=True))
+        items_tag = field_div.find(class_=lambda c: c and "field-items" in c)
         if items_tag:
             values = [_text(i) for i in items_tag.find_all(
                 class_=lambda c: c and "field-item" in c
@@ -366,32 +364,67 @@ def parse_detail_page(soup: BeautifulSoup, url: str, name: str) -> dict:
             value = " | ".join(v for v in values if v)
         else:
             value = _text(field_div)
-        if label:
-            raw[label] = value
+        add(label_tag.get_text(strip=True), value)
 
-    # --- Table-based field layout (some Drupal themes) ---
+    # 2. Drupal Views field cells (list/table Views output)
+    #    <td class="views-field views-field-field-szuletesi-hely">…</td>
+    for cell in soup.find_all(class_=lambda c: c and "views-field-field-" in c):
+        css = " ".join(cell.get("class", []))
+        # derive a label from the CSS class name
+        field_name = re.search(r"views-field-field-([\w-]+)", css)
+        if not field_name:
+            continue
+        label_from_css = field_name.group(1).replace("-", " ").title()
+        label_tag = cell.find(class_=lambda c: c and "views-label" in c)
+        label = label_tag.get_text(strip=True) if label_tag else label_from_css
+        value = _text(cell)
+        # strip the label prefix from the value if it echoes it
+        if value.startswith(label):
+            value = value[len(label):].strip()
+        add(label, value)
+
+    # 3. Two-cell table rows  <tr><th>Label:</th><td>Value</td></tr>
     for row in soup.find_all("tr"):
         cells = row.find_all(["th", "td"])
         if len(cells) == 2:
-            label = _clean_label(_text(cells[0]))
-            value = _text(cells[1])
-            if label and value:
-                raw[label] = value
+            add(cells[0].get_text(strip=True), _text(cells[1]))
 
-    # --- Definition list layout ---
+    # 4. Definition lists  <dl><dt>Label:</dt><dd>Value</dd></dl>
     for dl in soup.find_all("dl"):
-        terms = dl.find_all("dt")
-        descs = dl.find_all("dd")
-        for dt, dd in zip(terms, descs):
-            label = _clean_label(_text(dt))
-            value = _text(dd)
-            if label:
-                raw[label] = value
+        for dt, dd in zip(dl.find_all("dt"), dl.find_all("dd")):
+            add(dt.get_text(strip=True), _text(dd))
+
+    # 5. <strong> or <b> inline labels followed by sibling text
+    #    e.g.  <p><strong>Születési hely:</strong> Budapest</p>
+    for bold in soup.find_all(["strong", "b"]):
+        label_text = bold.get_text(strip=True)
+        if not label_text.endswith((":", "\xa0")):
+            continue
+        # value is the text immediately after the bold tag
+        nxt = bold.next_sibling
+        if nxt and isinstance(nxt, str):
+            value = nxt.strip()
+        elif nxt:
+            value = _text(nxt)
+        else:
+            value = ""
+        if value:
+            add(label_text, value)
 
     if not raw:
-        log.warning("No labelled fields found on %s — check HTML structure", url)
+        log.warning("No labelled fields found on %s — page structure unknown", url)
     else:
-        log.debug("Labels found on %s: %s", url, list(raw.keys()))
+        log.debug("Fields on %s: %s", url, list(raw.keys()))
+
+    return raw
+
+
+def parse_detail_page(soup: BeautifulSoup, url: str, name: str) -> dict:
+    record = {col: "" for col in COLUMNS}
+    record["url"] = url
+    record["nev"] = name
+
+    raw = _collect_raw_fields(soup, url)
 
     for label, value in raw.items():
         col = FIELD_MAP.get(label)
@@ -401,9 +434,8 @@ def parse_detail_page(soup: BeautifulSoup, url: str, name: str) -> dict:
             else:
                 record[col] = value
         else:
-            log.debug("Unmapped label on %s: %r = %r", url, label, value[:80])
+            log.debug("Unmapped label %r = %r", label, value[:80])
 
-    # Store any unmapped fields in raw_fields for traceability
     unmapped = {k: v for k, v in raw.items() if k not in FIELD_MAP}
     record["raw_fields"] = json.dumps(unmapped, ensure_ascii=False) if unmapped else ""
 
