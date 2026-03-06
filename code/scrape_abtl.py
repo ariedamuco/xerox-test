@@ -284,7 +284,9 @@ def scrape_record(http: requests.Session, prs_id: int) -> dict | None:
     try:
         r = http.get(url, timeout=15)
         r.raise_for_status()
-        return parse_record(r.text, prs_id)
+        rec = parse_record(r.text, prs_id)
+        rec["url"] = url
+        return rec
     except requests.exceptions.RequestException as exc:
         print(f"  Error fetching PRS_ID {prs_id}: {exc}")
         return None
@@ -383,6 +385,9 @@ if __name__ == "__main__":
     postings = []
 
     for rec in records:
+        edu = rec.get("education") or []
+        ranks = rec.get("ranks") or []
+        sources = rec.get("sources") or []
         officers.append({
             "prs_id":      rec["prs_id"],
             "name":        rec.get("name"),
@@ -391,8 +396,11 @@ if __name__ == "__main__":
             "death_date":  rec.get("death_date"),
             "mother":      rec.get("mother"),
             "notes":       rec.get("notes"),
+            "education":   " | ".join(f"{e['name']} ({e['year']})" for e in edu),
+            "ranks":       " | ".join(f"{r['rank']} ({r['year']})" for r in ranks),
+            "sources":     " | ".join(sources),
+            "url":         rec.get("url", ""),
             "n_postings":  len(rec.get("postings", [])),
-            "n_ranks":     len(rec.get("ranks", [])),
         })
         for p in rec.get("postings", []):
             postings.append({
