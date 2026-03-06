@@ -253,11 +253,6 @@ def _text(tag) -> str:
     return tag.get_text(separator=" ", strip=True) if tag else ""
 
 
-def _multi_text(tags) -> str:
-    """Join multiple tags' text with ' | ' separator."""
-    return " | ".join(_text(t) for t in tags if _text(t))
-
-
 def _clean_label(raw: str) -> str:
     """
     Normalise a field label extracted from HTML.
@@ -266,6 +261,76 @@ def _clean_label(raw: str) -> str:
     the colon intact and the FIELD_MAP lookup silently fails.
     """
     return raw.replace("\xa0", " ").strip().rstrip(":").strip()
+
+
+# Maps every known Hungarian field label variant → CSV column name.
+# Defined at module level so it is not rebuilt on every page parse.
+FIELD_MAP: dict[str, str] = {
+    # name / identity
+    "Névváltozat": "nevvaltozat",
+    "Névváltozatok": "nevvaltozat",
+    "Névváltozat(ok)": "nevvaltozat",
+    "Más névváltozat": "nevvaltozat",
+    # birth
+    "Születési idő": "szuletesi_ido",
+    "Születési dátum": "szuletesi_ido",
+    "Született": "szuletesi_ido",
+    "Születési hely": "szuletesi_hely",
+    # residence
+    "Lakóhely": "lakohelyek",
+    "Lakóhelyek": "lakohelyek",
+    "Lakhely": "lakohelyek",
+    # occupation
+    "Foglalkozás": "foglalkozasok",
+    "Foglalkozások": "foglalkozasok",
+    "Foglalkozás(ok)": "foglalkozasok",
+    # biography
+    "Életrajzi megjegyzés": "eletrajzi_megjegyzes",
+    "Életrajzi megjegyzések": "eletrajzi_megjegyzes",
+    "Megjegyzés": "eletrajzi_megjegyzes",
+    # arrest
+    "Őrizetbevétel ideje": "orizetbevetel_ideje",
+    "Elfogás ideje": "orizetbevetel_ideje",
+    "Letartóztatás ideje": "orizetbevetel_ideje",
+    # charges
+    "Terhére rótt cselekmény": "terhelt_cselekmeny",
+    "Terhére rótt cselekmény(ek)": "terhelt_cselekmeny",
+    "Vád": "terhelt_cselekmeny",
+    # location of act
+    "A cselekmény helyszíne": "cselekmeny_helyszine",
+    "A cselekmény helyszíne(i)": "cselekmeny_helyszine",
+    "Cselekmény helyszíne": "cselekmeny_helyszine",
+    # classification
+    "A cselekmény minősítése": "cselekmeny_minosites",
+    "A cselekmény minősítése(i)": "cselekmeny_minosites",
+    "Cselekmény minősítése": "cselekmeny_minosites",
+    # criminal proceedings
+    "Büntetőeljárás": "buntetoeljarasok",
+    "Büntetőeljárások": "buntetoeljarasok",
+    "Kapcsolódó büntetőeljárás": "buntetoeljarasok",
+    # penal measure
+    "Büntetőintézkedés": "bunteto_intezkedesek",
+    "Büntetőintézkedések": "bunteto_intezkedesek",
+    "Büntetés": "bunteto_intezkedesek",
+    "Ítélet": "bunteto_intezkedesek",
+    # death
+    "Elhalálozás ideje": "elhalalozes_ideje",
+    "Halál ideje": "elhalalozes_ideje",
+    "Kivégzés ideje": "elhalalozes_ideje",
+    "Elhunyt": "elhalalozes_ideje",
+    "Elhalálozás helye": "elhalalozes_helye",
+    "Halál helye": "elhalalozes_helye",
+    "Kivégzés helye": "elhalalozes_helye",
+    # cause of death
+    "Elhalálozás oka": "elhalalozes_oka",
+    "Halál oka": "elhalalozes_oka",
+    "Kivégzés módja": "elhalalozes_oka",
+    # burial
+    "Temetési/elföldelési helyszín": "temetes_helye",
+    "Temetési helyszín": "temetes_helye",
+    "Elföldelés helye": "temetes_helye",
+    "Temető": "temetes_helye",
+}
 
 
 def parse_detail_page(soup: BeautifulSoup, url: str, name: str) -> dict:
@@ -323,81 +388,20 @@ def parse_detail_page(soup: BeautifulSoup, url: str, name: str) -> dict:
             if label:
                 raw[label] = value
 
-    # Map Hungarian field labels to output columns
-    FIELD_MAP = {
-        # name / identity
-        "Névváltozat": "nevvaltozat",
-        "Névváltozatok": "nevvaltozat",
-        "Névváltozat(ok)": "nevvaltozat",
-        "Más névváltozat": "nevvaltozat",
-        # birth
-        "Születési idő": "szuletesi_ido",
-        "Születési dátum": "szuletesi_ido",
-        "Született": "szuletesi_ido",
-        "Születési hely": "szuletesi_hely",
-        # residence
-        "Lakóhely": "lakohelyek",
-        "Lakóhelyek": "lakohelyek",
-        "Lakhely": "lakohelyek",
-        # occupation
-        "Foglalkozás": "foglalkozasok",
-        "Foglalkozások": "foglalkozasok",
-        "Foglalkozás(ok)": "foglalkozasok",
-        # biography
-        "Életrajzi megjegyzés": "eletrajzi_megjegyzes",
-        "Életrajzi megjegyzések": "eletrajzi_megjegyzes",
-        "Megjegyzés": "eletrajzi_megjegyzes",
-        # arrest
-        "Őrizetbevétel ideje": "orizetbevetel_ideje",
-        "Elfogás ideje": "orizetbevetel_ideje",
-        "Letartóztatás ideje": "orizetbevetel_ideje",
-        # charges
-        "Terhére rótt cselekmény": "terhelt_cselekmeny",
-        "Terhére rótt cselekmény(ek)": "terhelt_cselekmeny",
-        "Vád": "terhelt_cselekmeny",
-        # location of act
-        "A cselekmény helyszíne": "cselekmeny_helyszine",
-        "A cselekmény helyszíne(i)": "cselekmeny_helyszine",
-        "Cselekmény helyszíne": "cselekmeny_helyszine",
-        # classification
-        "A cselekmény minősítése": "cselekmeny_minosites",
-        "A cselekmény minősítése(i)": "cselekmeny_minosites",
-        "Cselekmény minősítése": "cselekmeny_minosites",
-        # criminal proceedings
-        "Büntetőeljárás": "buntetoeljarasok",
-        "Büntetőeljárások": "buntetoeljarasok",
-        "Kapcsolódó büntetőeljárás": "buntetoeljarasok",
-        # penal measure
-        "Büntetőintézkedés": "bunteto_intezkedesek",
-        "Büntetőintézkedések": "bunteto_intezkedesek",
-        "Büntetés": "bunteto_intezkedesek",
-        "Ítélet": "bunteto_intezkedesek",
-        # death
-        "Elhalálozás ideje": "elhalalozes_ideje",
-        "Halál ideje": "elhalalozes_ideje",
-        "Kivégzés ideje": "elhalalozes_ideje",
-        "Elhunyt": "elhalalozes_ideje",
-        "Elhalálozás helye": "elhalalozes_helye",
-        "Halál helye": "elhalalozes_helye",
-        "Kivégzés helye": "elhalalozes_helye",
-        # cause of death
-        "Elhalálozás oka": "elhalalozes_oka",
-        "Halál oka": "elhalalozes_oka",
-        "Kivégzés módja": "elhalalozes_oka",
-        # burial
-        "Temetési/elföldelési helyszín": "temetes_helye",
-        "Temetési helyszín": "temetes_helye",
-        "Elföldelés helye": "temetes_helye",
-        "Temető": "temetes_helye",
-    }
+    if not raw:
+        log.warning("No labelled fields found on %s — check HTML structure", url)
+    else:
+        log.debug("Labels found on %s: %s", url, list(raw.keys()))
 
     for label, value in raw.items():
         col = FIELD_MAP.get(label)
         if col:
-            if record[col]:  # append if already populated
+            if record[col]:
                 record[col] += " | " + value
             else:
                 record[col] = value
+        else:
+            log.debug("Unmapped label on %s: %r = %r", url, label, value[:80])
 
     # Store any unmapped fields in raw_fields for traceability
     unmapped = {k: v for k, v in raw.items() if k not in FIELD_MAP}
@@ -500,6 +504,16 @@ def scrape(
                 time.sleep(delay)
                 log.info("Scraping: %s", person_url)
                 detail_soup = fetch(session, person_url)
+
+                # Some jeltelenul.hu pages live under /index.php/ — try that
+                # variant automatically when the primary slug URL returns 404.
+                if detail_soup is None and "/index.php/" not in person_url:
+                    slug = person_url.rstrip("/").rsplit("/", 1)[-1]
+                    alt_url = f"{BASE_URL}/index.php/{slug}"
+                    log.info("Primary 404 — retrying as %s", alt_url)
+                    detail_soup = fetch(session, alt_url)
+                    if detail_soup is not None:
+                        person_url = alt_url
 
                 if detail_soup is None:
                     log.warning("Skipping %s (fetch failed)", person_url)
