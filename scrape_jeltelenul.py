@@ -205,13 +205,22 @@ def parse_list_page(soup: BeautifulSoup) -> list[dict]:
                 persons.append({"name": name, "url": full_url, "birth_info": birth_info})
             else:
                 # Stub: no published page exists.
-                # Cell text format: "Name [City, Year]" or just "Name".
+                # Bracket formats seen in the wild:
+                #   "Name [City, Year]"   ← most common (comma-separated)
+                #   "Name [City Year]"    ← no comma
+                #   "Name [nincs adat]"   ← "no data" placeholder
                 cell_text = first_cell.get_text(" ", strip=True)
-                m = re.match(r'^(.+?)\s*\[([^,\]]+),\s*(\d{4})\]\s*$', cell_text)
+                m = re.match(r'^(.+?)\s*\[([^\]]+)\]\s*$', cell_text)
                 if m:
                     name = m.group(1).strip()
-                    birth_city = m.group(2).strip()
-                    birth_year = m.group(3).strip()
+                    bracket = m.group(2).strip()
+                    year_m = re.search(r'\b(\d{4})\b', bracket)
+                    if year_m:
+                        birth_year = year_m.group(1)
+                        birth_city = bracket[:year_m.start()].rstrip(", ").strip()
+                    else:
+                        birth_year = ""
+                        birth_city = bracket  # e.g. "nincs adat"
                 else:
                     name = cell_text
                     birth_city = birth_year = ""
@@ -593,7 +602,18 @@ def scrape(
                         person_url = alt_url
 
                 if detail_soup is None:
-                    log.warning("Skipping %s (fetch failed)", person_url)
+                    log.warning("Detail page unavailable for %s — writing partial record", person_url)
+                    record = {col: "" for col in COLUMNS}
+                    record["url"] = person_url
+                    record["name"] = person["name"]
+                    record["birth_date"] = person.get("birth_info", "")
+                    writer.writerow(record)
+                    csvfile.flush()
+                    done_urls.add(person_url)
+                    total_scraped += 1
+                    checkpoint["done_urls"] = list(done_urls)
+                    checkpoint["current_page"] = page
+                    save_checkpoint(CHECKPOINT_FILE, checkpoint)
                     continue
 
                 record = parse_detail_page(detail_soup, person_url, person["name"])
