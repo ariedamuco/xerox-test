@@ -9,10 +9,10 @@ dist/
 build/
 .eggs/
 
-# Scraper outputs
-*.log
-jeltelenul_checkpoint.json
-jeltelenul_data.csv
+# Scraper outputs (kept out of git; data/ dir is tracked via .gitkeep)
+data/*.csv
+data/*.json
+data/*.log
 
 # Virtual environments
 .venv/
